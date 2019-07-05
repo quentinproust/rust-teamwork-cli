@@ -17,7 +17,7 @@ pub struct TeamWorkService<'a> {
 }
 
 impl<'a> TeamWorkService<'a> {
-    pub fn new<'b>(config: &'b TeamWorkConfig) -> TeamWorkService<'b> {
+    pub fn new(config: &TeamWorkConfig) -> TeamWorkService {
         let client = HttpClient::new(config);
 
         return TeamWorkService { client };
@@ -52,6 +52,13 @@ impl<'a> TeamWorkService<'a> {
             .get_with_params(url.as_str(), &[("nestSubTasks", "yes")])?;
 
         return Ok(response.tasks);
+    }
+
+    pub fn get_task(&self, task_id: &usize) -> Result<Task, reqwest::Error> {
+        let url = format!("tasks/{}.json", task_id);
+        let response: TaskResponse = self.client.get(url.as_str())?;
+
+        return Ok(response.task);
     }
 
     pub fn last_time_entries(
@@ -151,7 +158,7 @@ impl<'a> TeamWorkService<'a> {
 
         println!("Start adding time entries. Remaining hours : {}", remaining_input_hours);
 
-        while current_date.lt(today) && remaining_input_hours > 0 {
+        while current_date.le(today) && remaining_input_hours > 0 {
             let remaining_workload = get_remaining_workload(current_date, &existing_time_entries, times_off);
 
             println!("{} / {} : {}",
@@ -201,7 +208,7 @@ impl<'a> TeamWorkService<'a> {
         return self.client.post(path.as_str(), &body);
     }
 
-// projects http 'http://altima1.eu.teamwork.com/projects.json' authorization:'basic dHdwXzlrM3NoOXFQU1RPUU03QnJISWRDMUFzSlo3WXRfZXU6eHh4'
+// projects http 'http://altima1.eu.teamwork.com/projects.json'authorization:'basic dHdwXzlrM3NoOXFQU1RPUU03QnJISWRDMUFzSlo3WXRfZXU6eHh4'
 // project's tasks http 'http://altima1.eu.teamwork.com/projects/359738/tasks.json' authorization:'basic dHdwXzlrM3NoOXFQU1RPUU03QnJISWRDMUFzSlo3WXRfZXU6eHh4'
 // create a time entry for a task https://developer.teamwork.com/projects/time-tracking/create-a-time-entry-for-a-task
 }
@@ -317,7 +324,13 @@ impl TimeEntry {
     pub fn task(&self) -> Task {
         let id = self.todo_item_id.clone();
         let name = self.todo_item_name.clone();
-        return Task { id: id.parse().unwrap(), name, sub_tasks: vec![] };
+        return Task {
+            id: id.parse().unwrap(),
+            name, sub_tasks: vec![],
+            todo_list_name: "".to_string(),
+            project_name: "".to_string(),
+            parent_task: None,
+        };
     }
 }
 
@@ -348,13 +361,34 @@ pub struct TasksResponse {
     pub tasks: Vec<Task>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TaskResponse {
+    #[serde(alias = "STATUS")]
+    pub status: String,
+    #[serde(alias = "todo-item")]
+    pub task: Task,
+}
+
 #[derive(Debug, Deserialize, PartialEq, Clone)]
 pub struct Task {
     pub id: usize,
+    #[serde(alias = "project-name")]
+    pub project_name: String,
+    #[serde(alias = "todo-list-name")]
+    pub todo_list_name: String,
+    #[serde(alias = "parent-task")]
+    pub parent_task: Option<ParentTask>,
     #[serde(alias = "content")]
     pub name: String,
     #[serde(default, alias = "subTasks")]
     pub sub_tasks: Vec<Task>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+pub struct ParentTask {
+    pub id: String,
+    #[serde(alias = "content")]
+    pub name: String,
 }
 
 #[derive(Clone)]

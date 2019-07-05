@@ -1,12 +1,9 @@
-extern crate toml;
-
-use serde::{Serialize, Deserialize};
-use std::fs;
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::path::PathBuf;
-use std::marker::PhantomData;
-//use serde::export::PhantomData;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct NoConfigError;
@@ -24,15 +21,15 @@ impl Error for NoConfigError {
 }
 
 #[derive(Deserialize, Clone, Serialize)]
-pub struct TeamWorkConfig<'a> {
+pub struct TeamWorkConfig {
     pub company_id: String,
     pub token: String,
     pub project_aliases: Vec<ProjectAlias>,
     pub times_off: Vec<TimeOff>,
-    _m: Option<PhantomData<&'a str>>,
+    pub starred_tasks: Vec<usize>,
 }
 
-impl<'a> TeamWorkConfig<'a> {
+impl TeamWorkConfig {
     pub fn get_alias(&self, project_id: &String) -> Option<&ProjectAlias> {
         return self.project_aliases.iter()
             .find(|a| a.project_id.as_str() == project_id.as_str());
@@ -44,11 +41,14 @@ impl<'a> TeamWorkConfig<'a> {
             hours: hours.clone(),
         };
         let mut new = self.clone();
-        new.times_off.retain(|time_off| time_off.date != date);
+        let mut times_off = new.times_off;
+        times_off.retain(|time_off| time_off.date != date);
 
         if hours > 0 {
-            new.times_off.push(off);
+            times_off.push(off);
         }
+
+        new.times_off = times_off;
 
         return new;
     }
@@ -66,7 +66,7 @@ pub struct TimeOff {
     pub hours: i32,
 }
 
-pub fn get_config<'a>() -> Result<Option<TeamWorkConfig<'a>>, Box<Error>> {
+pub fn get_config() -> Result<Option<TeamWorkConfig>, Box<Error>> {
     let file_path = get_teamwork_file();
 
     if !file_path.exists() {
@@ -75,7 +75,8 @@ pub fn get_config<'a>() -> Result<Option<TeamWorkConfig<'a>>, Box<Error>> {
 
     let file_content = fs::read_to_string(file_path)?;
 
-    let config: TeamWorkConfig = toml::from_str(&file_content)?;
+    let serializable_config: SerializableTeamWorkConfig = serde_json::from_str(&file_content)?;
+    let config = TeamWorkConfig::from(serializable_config);
 
     return Ok(Some(config));
 }
@@ -86,12 +87,12 @@ pub fn save_token_and_company(company_id: &String, token: &String) {
         token: token.clone(),
         project_aliases: vec![],
         times_off: vec![],
-        _m: None
+        starred_tasks: vec![],
     };
     save_config(&config);
 }
 
-pub fn save_alias<'a>(project_id: &String, alias: &String) -> Result<TeamWorkConfig<'a>, Box<Error>> {
+pub fn save_alias(project_id: &String, alias: &String) -> Result<TeamWorkConfig, Box<Error>> {
     match get_config() {
         Ok(config) => match config {
             Some(c) => {
@@ -116,8 +117,68 @@ pub fn save_alias<'a>(project_id: &String, alias: &String) -> Result<TeamWorkCon
     }
 }
 
+pub fn is_starred_task(task_id: &usize) -> Result<bool, Box<Error>> {
+    match get_config() {
+        Ok(config) => match config {
+            Some(c) => {
+                let is_found = c.starred_tasks.iter().find(|t| t == &task_id)
+                    .map(|_| true)
+                    .unwrap_or_else(|| false);
+
+                Ok(is_found)
+            }
+            None => Err(Box::new(NoConfigError)),
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn star_task(task_id: usize) -> Result<(), Box<Error>> {
+    match get_config() {
+        Ok(config) => match config {
+            Some(c) => {
+                let mut tasks = c.starred_tasks.to_vec();
+                tasks.push(task_id);
+
+                let tc = TeamWorkConfig {
+                    starred_tasks: tasks,
+                    ..c
+                };
+
+                save_config(&tc);
+                Ok(())
+            }
+            None => Err(Box::new(NoConfigError)),
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn unstar_task(task_id: &usize) -> Result<(), Box<Error>> {
+    match get_config() {
+        Ok(config) => match config {
+            Some(c) => {
+                let mut tasks = c.starred_tasks.to_vec();
+                tasks.retain(|t| t != task_id);
+
+                let tc = TeamWorkConfig {
+                    starred_tasks: tasks,
+                    ..c
+                };
+
+                save_config(&tc);
+                Ok(())
+            }
+            None => Err(Box::new(NoConfigError)),
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub fn save_config(config: &TeamWorkConfig) {
-    let toml = toml::to_string(config)
+    let serializable_config = SerializableTeamWorkConfig::from(config);
+
+    let toml = serde_json::to_string(&serializable_config)
         .expect("Could not create config");
 
     fs::write(get_teamwork_file(), toml)
@@ -131,6 +192,37 @@ fn get_teamwork_file() -> PathBuf {
     return home_dir.join(".teamwork");
 }
 
-/*
-read write file : https://stackoverflow.com/questions/31192956/whats-the-de-facto-way-of-reading-and-writing-files-in-rust-1-x
-*/
+#[derive(Deserialize, Clone, Serialize)]
+pub struct SerializableTeamWorkConfig {
+    pub company_id: String,
+    pub token: String,
+    project_aliases: Option<Vec<ProjectAlias>>,
+    times_off: Option<Vec<TimeOff>>,
+    starred_tasks: Option<Vec<usize>>,
+}
+
+impl From<&TeamWorkConfig> for SerializableTeamWorkConfig {
+    fn from(config: &TeamWorkConfig) -> Self {
+        let c = config.clone();
+
+        return SerializableTeamWorkConfig {
+            company_id: c.company_id,
+            token: c.token,
+            project_aliases: Some(c.project_aliases),
+            times_off: Some(c.times_off),
+            starred_tasks: Some(c.starred_tasks),
+        };
+    }
+}
+
+impl From<SerializableTeamWorkConfig> for TeamWorkConfig {
+    fn from(config: SerializableTeamWorkConfig) -> Self {
+        return TeamWorkConfig {
+            company_id: config.company_id,
+            token: config.token,
+            project_aliases: config.project_aliases.unwrap_or_else(|| vec![]),
+            times_off: config.times_off.unwrap_or_else(|| vec![]),
+            starred_tasks: config.starred_tasks.unwrap_or_else(|| vec![]),
+        };
+    }
+}
