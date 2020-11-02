@@ -1,6 +1,9 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::hash::Hash;
+use std::io::Result as IoResult;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -20,7 +23,7 @@ impl Error for NoConfigError {
     }
 }
 
-#[derive(Deserialize, Clone, Serialize)]
+#[derive(Deserialize, Clone, Serialize, Debug)]
 pub struct TeamWorkConfig {
     pub company_id: String,
     pub token: String,
@@ -54,21 +57,46 @@ impl TeamWorkConfig {
     }
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+impl PartialEq<TeamWorkConfig> for TeamWorkConfig {
+    fn eq(&self, other: &TeamWorkConfig) -> bool {
+        *self.company_id == other.company_id
+            && *self.token == other.token
+            && array_eq(&*self.times_off, &other.times_off)
+            && array_eq(&*self.starred_tasks, &other.starred_tasks)
+            && array_eq(&*self.project_aliases, &other.project_aliases)
+    }
+}
+
+fn array_eq<T>(a: &[T], b: &[T]) -> bool where T: Eq + Hash,
+{
+    if a.len() != b.len() {
+        return false;
+    }
+
+    let a_hash: HashSet<_> = a.iter().collect();
+    let b_hash: HashSet<_> = b.iter().collect();
+
+    a_hash == b_hash
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProjectAlias {
     pub project_id: String,
     pub alias: String,
 }
 
-#[derive(Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TimeOff {
     pub date: String,
     pub hours: i32,
 }
 
-pub fn get_config() -> Result<Option<TeamWorkConfig>, Box<Error>> {
-    let file_path = get_teamwork_file();
+pub fn get_config() -> Result<Option<TeamWorkConfig>, Box<dyn Error>> {
+    let path = get_teamwork_file();
+    return get_config_from_path(&path);
+}
 
+pub fn get_config_from_path(file_path: &PathBuf) -> Result<Option<TeamWorkConfig>, Box<dyn Error>> {
     if !file_path.exists() {
         return Ok(None);
     }
@@ -92,7 +120,7 @@ pub fn save_token_and_company(company_id: &String, token: &String) {
     save_config(&config);
 }
 
-pub fn save_alias(project_id: &String, alias: &String) -> Result<TeamWorkConfig, Box<Error>> {
+pub fn save_alias(project_id: &String, alias: &String) -> Result<TeamWorkConfig, Box<dyn Error>> {
     match get_config() {
         Ok(config) => match config {
             Some(c) => {
@@ -117,7 +145,7 @@ pub fn save_alias(project_id: &String, alias: &String) -> Result<TeamWorkConfig,
     }
 }
 
-pub fn is_starred_task(task_id: &usize) -> Result<bool, Box<Error>> {
+pub fn is_starred_task(task_id: &usize) -> Result<bool, Box<dyn Error>> {
     match get_config() {
         Ok(config) => match config {
             Some(c) => {
@@ -133,7 +161,7 @@ pub fn is_starred_task(task_id: &usize) -> Result<bool, Box<Error>> {
     }
 }
 
-pub fn star_task(task_id: usize) -> Result<(), Box<Error>> {
+pub fn star_task(task_id: usize) -> Result<(), Box<dyn Error>> {
     match get_config() {
         Ok(config) => match config {
             Some(c) => {
@@ -154,7 +182,7 @@ pub fn star_task(task_id: usize) -> Result<(), Box<Error>> {
     }
 }
 
-pub fn unstar_task(task_id: &usize) -> Result<(), Box<Error>> {
+pub fn unstar_task(task_id: &usize) -> Result<(), Box<dyn Error>> {
     match get_config() {
         Ok(config) => match config {
             Some(c) => {
@@ -176,13 +204,17 @@ pub fn unstar_task(task_id: &usize) -> Result<(), Box<Error>> {
 }
 
 pub fn save_config(config: &TeamWorkConfig) {
+    save_config_to_path(config, &get_teamwork_file())
+        .expect("Unable to write file ~/.teamwork");
+}
+
+fn save_config_to_path(config: &TeamWorkConfig, path: &PathBuf) -> IoResult<()> {
     let serializable_config = SerializableTeamWorkConfig::from(config);
 
-    let toml = serde_json::to_string(&serializable_config)
+    let toml = serde_json::to_string_pretty(&serializable_config)
         .expect("Could not create config");
 
-    fs::write(get_teamwork_file(), toml)
-        .expect("Unable to write file ~/.teamwork");
+    return fs::write(path, toml);
 }
 
 fn get_teamwork_file() -> PathBuf {
@@ -224,5 +256,150 @@ impl From<SerializableTeamWorkConfig> for TeamWorkConfig {
             times_off: config.times_off.unwrap_or_else(|| vec![]),
             starred_tasks: config.starred_tasks.unwrap_or_else(|| vec![]),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_can_save_config() {
+        let mut output_path = std::env::temp_dir();
+        output_path.push(".teamwork-cli-config_test_can_save_config-c6b69f99-5a24-49d1-8b7d-d76f88a5c245.json");
+
+        let config = TeamWorkConfig {
+            company_id: "test-company-id".to_string(),
+            token: "test-token".to_string(),
+            project_aliases: vec![
+                ProjectAlias {
+                    alias: "project-alias-1".to_string(),
+                    project_id: "project-id-1".to_string(),
+                },
+                ProjectAlias {
+                    alias: "project-alias-1".to_string(),
+                    project_id: "project-id-1".to_string(),
+                }
+            ],
+            starred_tasks: vec![124343, 24543543],
+            times_off: vec![
+                TimeOff {
+                    date: "2020-01-23".to_string(),
+                    hours: 8,
+                },
+                TimeOff {
+                    date: "2020-01-24".to_string(),
+                    hours: 4,
+                }
+            ],
+        };
+
+        let result = save_config_to_path(&config, &output_path);
+
+        assert!(!result.is_err(), "{} should have been writen without error, but got {:#?}", output_path.to_str().unwrap(), result.err());
+
+        let result_content = fs::read_to_string(output_path);
+        let expected_content = "{
+  \"company_id\": \"test-company-id\",
+  \"token\": \"test-token\",
+  \"project_aliases\": [
+    {
+      \"project_id\": \"project-id-1\",
+      \"alias\": \"project-alias-1\"
+    },
+    {
+      \"project_id\": \"project-id-1\",
+      \"alias\": \"project-alias-1\"
+    }
+  ],
+  \"times_off\": [
+    {
+      \"date\": \"2020-01-23\",
+      \"hours\": 8
+    },
+    {
+      \"date\": \"2020-01-24\",
+      \"hours\": 4
+    }
+  ],
+  \"starred_tasks\": [
+    124343,
+    24543543
+  ]
+}";
+
+        assert_eq!(result_content.unwrap(), expected_content);
+    }
+
+    #[test]
+    fn test_can_read_config() {
+        let mut output_path = std::env::temp_dir();
+        output_path.push(".teamwork-cli-config_test_can_read_config-c6b69f99-5a24-49d1-8b7d-d76f88a5c245.json");
+
+        let test_config_as_string = "{
+  \"company_id\": \"test-company-id\",
+  \"token\": \"test-token\",
+  \"project_aliases\": [
+    {
+      \"project_id\": \"project-id-1\",
+      \"alias\": \"project-alias-1\"
+    },
+    {
+      \"project_id\": \"project-id-1\",
+      \"alias\": \"project-alias-1\"
+    }
+  ],
+  \"times_off\": [
+    {
+      \"date\": \"2020-01-23\",
+      \"hours\": 8
+    },
+    {
+      \"date\": \"2020-01-24\",
+      \"hours\": 4
+    }
+  ],
+  \"starred_tasks\": [
+    124343,
+    24543543
+  ]
+}";
+
+        fs::write(output_path.clone(), test_config_as_string).unwrap();
+
+        let result = get_config_from_path(&output_path);
+
+        assert!(!result.is_err(), "should have read config from {}, but got {:#?}", output_path.to_str().unwrap(), result.err());
+
+        let success = result.unwrap();
+        assert!(success.is_some(), "should have existing config");
+
+        let config = TeamWorkConfig {
+            company_id: "test-company-id".to_string(),
+            token: "test-token".to_string(),
+            project_aliases: vec![
+                ProjectAlias {
+                    alias: "project-alias-1".to_string(),
+                    project_id: "project-id-1".to_string(),
+                },
+                ProjectAlias {
+                    alias: "project-alias-1".to_string(),
+                    project_id: "project-id-1".to_string(),
+                }
+            ],
+            starred_tasks: vec![124343, 24543543],
+            times_off: vec![
+                TimeOff {
+                    date: "2020-01-23".to_string(),
+                    hours: 8,
+                },
+                TimeOff {
+                    date: "2020-01-24".to_string(),
+                    hours: 4,
+                }
+            ],
+        };
+
+        assert_eq!(success.unwrap(), config);
     }
 }

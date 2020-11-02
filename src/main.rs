@@ -1,21 +1,23 @@
-extern crate reqwest;
 #[macro_use]
 extern crate prettytable;
+extern crate reqwest;
+
+use std::error::Error;
+
+use chrono::{Datelike, NaiveDate, Utc};
+use structopt::StructOpt;
+
+use teamwork_config::{get_config, save_token_and_company};
+
+use crate::console_printers::{print_projects, print_tasks, print_time_entries, print_times_off};
+use crate::interactive::InteractiveService;
+use crate::teamwork_config::{save_alias, save_config, TeamWorkConfig, TimeOff};
+use crate::teamwork_service::TeamWorkService;
 
 mod interactive;
 mod teamwork_config;
 mod teamwork_service;
 mod console_printers;
-
-use structopt::StructOpt;
-use teamwork_config::{save_token_and_company, get_config};
-use crate::teamwork_config::{TeamWorkConfig, save_alias, save_config, TimeOff};
-use crate::teamwork_service::{TeamWorkService, Project, TaskList, Task};
-use crate::interactive::InteractiveService;
-use std::error::Error;
-use crate::console_printers::{print_projects, print_time_entries, print_times_off, print_tasks};
-use chrono::{NaiveDate, Utc, Datelike};
-use dialoguer::{Select, Confirmation};
 
 #[derive(StructOpt, Debug)]
 #[structopt(rename_all = "kebab-case")]
@@ -68,7 +70,7 @@ enum TimeEntriesCommand {
         #[structopt(short = "s")]
         start_date: String,
         #[structopt(short = "h")]
-        hours: i32,
+        hours: String,
         #[structopt(short = "d")]
         description: String,
         #[structopt(short = "r")]
@@ -93,10 +95,10 @@ enum TimeOffCommand {
     },
 }
 
-fn main() -> Result<(), Box<Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::from_args();
 
-    println!("{:?}", args);
+    //println!("{:?}", args);
 
     match args {
         Cli::Auth { company_id, token } => {
@@ -126,7 +128,7 @@ fn handle_command_with_config(config: &TeamWorkConfig) {
         Cli::Interactive => {
             let interactive = InteractiveService::new(config);
             interactive.handle();
-        },
+        }
         _ => {}
     }
 }
@@ -198,7 +200,7 @@ fn handle_time_entries_command(time_entries_command: TimeEntriesCommand, config:
                 Err(e) => println!("Could not get last used tasks \n{:#?}", e)
             }
         }
-        TimeEntriesCommand::Missing { since, included } => {
+        TimeEntriesCommand::Missing { since, included: _included } => {
             println!("Getting missing entries since {} ...", since);
 
             let since_date = NaiveDate::parse_from_str(&since, "%Y-%m-%d")
@@ -214,12 +216,34 @@ fn handle_time_entries_command(time_entries_command: TimeEntriesCommand, config:
                 Err(e) => println!("Could not get last time entries \n{:#?}", e)
             }
         }
-        TimeEntriesCommand::Save { task_id, start_date, hours, description, dry_run } => {
+        TimeEntriesCommand::Save { task_id, start_date, hours: time, description, dry_run } => {
             let date = NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
                 .expect(&format!("Could not parse {} using format %Y-%m-%d", &start_date));
+
+            let hours = parse_time_duration(time.as_str())
+                .expect(&format!("Could not parse {}. Expected format xxdyyh, for example 8d4h for 8 days and 4 hours.", &time));
 
             service.save_time(task_id, date, hours, description, dry_run, &config.times_off.iter())
                 .expect("Fail to save times");
         }
     }
+}
+
+fn parse_time_duration(time: &str) -> Option<i32> {
+    let time_regex = regex::Regex::new(r#"(([0-9]+)d)?(([0-9]+)h)?"#).unwrap();
+    let hours = time_regex.captures(time)
+        .and_then(|c| {
+            let x = c.iter().collect::<Vec<_>>();
+            if let &[_, _, None, _, None] = &*x {
+                None
+            } else if let &[_, _, input_days, _, input_hours] = &*x {
+                let d = input_days.map(|m| m.as_str().parse::<i32>().unwrap()).unwrap_or(0);
+                let h = input_hours.map(|m| m.as_str().parse::<i32>().unwrap()).unwrap_or(0);
+
+                Some(d * 8 + h)
+            } else {
+                None
+            }
+        });
+    return hours;
 }

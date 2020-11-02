@@ -165,7 +165,7 @@ impl<'a> InteractiveService<'a> {
         let default_date = self.service.last_time_entries(1, None)
             .map(|tes| tes.first()
                 .map(|te| te.date.date().naive_local()))
-            .unwrap_or_else(|err| None)
+            .unwrap_or_else(|_err| None)
             .map(|date| date.succ())
             .map(|date| date.format("%Y-%m-%d").to_string());
 
@@ -237,9 +237,9 @@ impl<'a> ToString for Commands<'a> {
     fn to_string(&self) -> String {
         return match self {
             Commands::Back => "Go Back".to_string(),
-            Commands::StarTask(t) => "Star the task".to_string(),
-            Commands::UnstarTask(t) => "Unstar the task".to_string(),
-            Commands::EnterTimeEntry(t) => "Enter a time entry".to_string(),
+            Commands::StarTask(_t) => "Star the task".to_string(),
+            Commands::UnstarTask(_t) => "Unstar the task".to_string(),
+            Commands::EnterTimeEntry(_t) => "Enter a time entry".to_string(),
         };
     }
 }

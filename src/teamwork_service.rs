@@ -68,8 +68,6 @@ impl<'a> TeamWorkService<'a> {
     ) -> Result<Vec<TimeEntry>, reqwest::Error> {
         let account = self.get_account()?;
 
-        println!("nb {}", nb_result);
-
         let from_date_opt = start_date.map(|d| d.format("%Y%m%d").to_string());
 
         let mut query_params = vec![
@@ -86,8 +84,6 @@ impl<'a> TeamWorkService<'a> {
             "time_entries.json",
             query_params.as_slice(),
         )?;
-
-        println!("nb time entries {}", response.time_entries.len());
 
         return Ok(response.time_entries);
     }
@@ -161,11 +157,14 @@ impl<'a> TeamWorkService<'a> {
         while current_date.le(today) && remaining_input_hours > 0 {
             let remaining_workload = get_remaining_workload(current_date, &existing_time_entries, times_off);
 
-            println!("{} / {} : {}",
+            println!("{} - {} / {} : {}",
                      current_date.format("%Y%m%d"),
                      remaining_workload,
+                     remaining_input_hours,
                      description);
-            if !dry_run {
+            if !dry_run && remaining_workload == 0 {
+                println!("\t 💤 (no work)")
+            } else if !dry_run {
                 let new_time_entry = TimeEntryInput {
                     date: current_date.format("%Y%m%d").to_string(),
                     time: "08:00".to_string(),
@@ -448,8 +447,6 @@ impl<'a> HttpClient<'a> {
 
         let with_params = Url::parse_with_params(&url, query_params)
             .expect("Could not parse url");
-
-        println!("url {}", with_params);
 
         let client = reqwest::Client::new();
         let no_password: Option<String> = None;
